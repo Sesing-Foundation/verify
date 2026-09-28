@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>DBE Verification Portal</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #ffffff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+    .card {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    }
+    h2 { margin: 0 0 8px; font-size: 1.25rem; font-weight: 600; }
+    p { margin: 0 0 24px; font-size: 0.9rem; color: #94a3b8; }
+    .btn {
+      width: 100%;
+      background: #2563eb;
+      color: #ffffff;
+      padding: 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:active { background: #1d4ed8; }
+    .status {
+      margin-top: 20px;
+      font-size: 0.85rem;
+      color: #38bdf8;
+      min-height: 24px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>DBE Secure Capture</h2>
+    <p>Hardware-locked live audit verification</p>
+
+    <input type="file" id="videoInput" accept="video/*" capture="camcorder" style="display:none;" onchange="handleVideo(this)">
+    <button id="recordBtn" class="btn" onclick="document.getElementById('videoInput').click()">Record Live Video</button>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    var urlParams = new URLSearchParams(window.location.search);
+    var auditId = urlParams.get('auditId') || '';
+    var currentLat = '', currentLng = '';
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        currentLat = pos.coords.latitude;
+        currentLng = pos.coords.longitude;
+      }, function() {}, { enableHighAccuracy: true });
+    }
+
+    function handleVideo(input) {
+      var file = input.files[0];
+      if (!file) return;
+
+      var btn = document.getElementById('recordBtn');
+      var status = document.getElementById('status');
+
+      btn.style.display = 'none';
+      status.innerText = "Encrypting and uploading verification...";
+
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var payload = {
+          auditId: auditId,
+          video: e.target.result,
+          lat: currentLat,
+          lng: currentLng
+        };
+
+        fetch("https://script.google.com/macros/s/AKfycbywLtQ-gTIr82XA--hspitdQH903URzyZrV3a80LQjlX2asUG-xyNoewgHoYYNUG8TZ/exec", {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+        .then(function() {
+          status.innerText = "Audit uploaded successfully. Exiting...";
+          setTimeout(function() {
+            window.close();
+            history.back();
+          }, 1200);
+        })
+        .catch(function() {
+          btn.style.display = 'block';
+          status.innerText = "Upload failed. Please record again.";
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  </script>
+</body>
+</html>
