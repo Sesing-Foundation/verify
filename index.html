@@ -40,7 +40,10 @@
       font-weight: 600;
       cursor: pointer;
     }
-    .btn:active { background: #1d4ed8; }
+    .btn-done {
+      background: #10b981;
+      margin-top: 16px;
+    }
     .status {
       margin-top: 20px;
       font-size: 0.85rem;
@@ -51,7 +54,7 @@
 </head>
 <body>
 
-  <div class="card">
+  <div class="card" id="mainCard">
     <h2>DBE Secure Capture</h2>
     <p>Hardware-locked live audit verification</p>
 
@@ -70,6 +73,11 @@
         currentLat = pos.coords.latitude;
         currentLng = pos.coords.longitude;
       }, function() {}, { enableHighAccuracy: true });
+    }
+
+    function exitPortal() {
+      window.close();
+      history.back();
     }
 
     function handleVideo(input) {
@@ -98,11 +106,13 @@
           body: JSON.stringify(payload)
         })
         .then(function() {
-          status.innerText = "Audit uploaded successfully. Exiting...";
+          document.getElementById('mainCard').innerHTML = 
+            '<h2>Verification Complete</h2>' +
+            '<p style="color:#10b981; font-weight:600;">Media and GPS secured.</p>' +
+            '<button class="btn btn-done" onclick="exitPortal()">Return to App</button>';
           setTimeout(function() {
-            window.close();
-            history.back();
-          }, 1200);
+            exitPortal();
+          }, 1500);
         })
         .catch(function() {
           btn.style.display = 'block';
