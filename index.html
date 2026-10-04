@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>DBE Verification Portal</title>
+
+  <!-- MediaPipe Face Detection Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+
   <style>
     * { box-sizing: border-box; }
     body {
@@ -40,6 +45,10 @@
       font-weight: 600;
       cursor: pointer;
     }
+    .btn-stop {
+      background: #dc2626;
+      margin-top: 12px;
+    }
     .btn-done {
       background: #10b981;
       margin-top: 16px;
@@ -50,6 +59,14 @@
       color: #38bdf8;
       min-height: 24px;
     }
+    #canvasPreview {
+      width: 100%;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      background: #000;
+      display: none;
+      transform: scaleX(1);
+    }
   </style>
 </head>
 <body>
@@ -58,8 +75,11 @@
     <h2>DBE Secure Capture</h2>
     <p>Hardware-locked live audit verification</p>
 
-    <input type="file" id="videoInput" accept="video/*" capture="camcorder" style="display:none;" onchange="handleVideo(this)">
-    <button id="recordBtn" class="btn" onclick="document.getElementById('videoInput').click()">Record Live Video</button>
+    <!-- Hidden video feed and visible privacy-blurred canvas -->
+    <video id="videoFeed" playsinline muted autoplay style="display:none;"></video>
+    <canvas id="canvasPreview"></canvas>
+
+    <button id="actionBtn" class="btn" onclick="startCapture()">Start Blurred Recording</button>
     <div id="status" class="status"></div>
   </div>
 
@@ -68,6 +88,18 @@
     var auditId = urlParams.get('auditId') || '';
     var currentLat = '', currentLng = '';
 
+    var videoElement = document.getElementById('videoFeed');
+    var canvasElement = document.getElementById('canvasPreview');
+    var canvasCtx = canvasElement.getContext('2d');
+    var actionBtn = document.getElementById('actionBtn');
+    var statusText = document.getElementById('status');
+
+    var mediaStream = null;
+    var mediaRecorder = null;
+    var recordedChunks = [];
+    var isRecording = false;
+
+    // Geolocation capture
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(function(pos) {
         currentLat = pos.coords.latitude;
@@ -80,17 +112,140 @@
       history.back();
     }
 
-    function handleVideo(input) {
-      var file = input.files[0];
-      if (!file) return;
+    // Configure MediaPipe Face Detection
+    var faceDetection = new FaceDetection({
+      locateFile: function(file) {
+        return "https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/" + file;
+      }
+    });
 
-      var btn = document.getElementById('recordBtn');
-      var status = document.getElementById('status');
+    faceDetection.setOptions({
+      model: 'short',
+      minDetectionConfidence: 0.5
+    });
 
-      btn.style.display = 'none';
-      status.innerText = "Encrypting and uploading verification...";
+    // Real-time frame processing and blurring
+    faceDetection.onResults(function(results) {
+      if (!canvasElement.width && videoElement.videoWidth) {
+        canvasElement.width = videoElement.videoWidth;
+        canvasElement.height = videoElement.videoHeight;
+      }
 
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.detections && results.detections.length > 0) {
+        for (var i = 0; i < results.detections.length; i++) {
+          var box = results.detections[i].boundingBox;
+          var w = box.width * canvasElement.width;
+          var h = box.height * canvasElement.height;
+          var x = (box.xCenter * canvasElement.width) - (w / 2);
+          var y = (box.yCenter * canvasElement.height) - (h / 2);
+
+          // Add padding around detected face area
+          var padX = w * 0.15;
+          var padY = h * 0.20;
+
+          canvasCtx.save();
+          canvasCtx.beginPath();
+          canvasCtx.rect(x - padX, y - padY, w + (padX * 2), h + (padY * 2));
+          canvasCtx.clip();
+          canvasCtx.filter = 'blur(18px)';
+          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+          canvasCtx.restore();
+        }
+      }
+      canvasCtx.restore();
+    });
+
+    // Start camera, face detector, and video recording
+    async function startCapture() {
+      try {
+        statusText.innerText = "Initialising privacy camera...";
+        actionBtn.disabled = true;
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: true
+        });
+
+        videoElement.srcObject = mediaStream;
+        await videoElement.play();
+
+        canvasElement.style.display = 'block';
+
+        // Initialise camera loop with MediaPipe
+        var camera = new Camera(videoElement, {
+          onFrame: async function() {
+            if (isRecording) {
+              await faceDetection.send({ image: videoElement });
+            }
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+
+        // Capture stream directly from the canvas
+        var canvasStream = canvasElement.captureStream(25);
+
+        // Include audio track if available
+        var audioTracks = mediaStream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          canvasStream.addTrack(audioTracks[0]);
+        }
+
+        var mimeType = 'video/webm';
+        if (!MediaRecorder.isTypeSupported('video/webm')) {
+          mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : '';
+        }
+
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(canvasStream, mimeType ? { mimeType: mimeType } : {});
+
+        mediaRecorder.ondataavailable = function(e) {
+          if (e.data && e.data.size > 0) {
+            recordedChunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = uploadRecordedVideo;
+
+        mediaRecorder.start();
+        isRecording = true;
+
+        actionBtn.innerText = "Stop & Submit Video";
+        actionBtn.className = "btn btn-stop";
+        actionBtn.disabled = false;
+        actionBtn.onclick = stopCapture;
+        statusText.innerText = "Recording... Faces are automatically blurred.";
+
+      } catch (err) {
+        statusText.innerText = "Camera access denied or unsupported.";
+        actionBtn.disabled = false;
+      }
+    }
+
+    function stopCapture() {
+      isRecording = false;
+      actionBtn.style.display = 'none';
+      statusText.innerText = "Encrypting and uploading verification...";
+
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(function(t) { t.stop(); });
+      }
+    }
+
+    // Retains your exact Base64 conversion and Google Apps Script fetch logic
+    function uploadRecordedVideo() {
+      var blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
       var reader = new FileReader();
+
       reader.onload = function(e) {
         var payload = {
           auditId: auditId,
@@ -115,11 +270,15 @@
           }, 1500);
         })
         .catch(function() {
-          btn.style.display = 'block';
-          status.innerText = "Upload failed. Please record again.";
+          actionBtn.style.display = 'block';
+          actionBtn.className = "btn";
+          actionBtn.innerText = "Record Live Video";
+          actionBtn.onclick = startCapture;
+          statusText.innerText = "Upload failed. Please record again.";
         });
       };
-      reader.readAsDataURL(file);
+
+      reader.readAsDataURL(blob);
     }
   </script>
 </body>
