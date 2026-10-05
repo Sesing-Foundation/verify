@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>DBE Verification Portal</title>
 
-  <!-- MediaPipe Face Detection Libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <!-- Only MediaPipe Face Detection is needed -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
 
   <style>
@@ -65,7 +64,6 @@
       margin-bottom: 16px;
       background: #000;
       display: none;
-      transform: scaleX(1);
     }
   </style>
 </head>
@@ -75,7 +73,6 @@
     <h2>DBE Secure Capture</h2>
     <p>Hardware-locked live audit verification</p>
 
-    <!-- Hidden video feed and visible privacy-blurred canvas -->
     <video id="videoFeed" playsinline muted autoplay style="display:none;"></video>
     <canvas id="canvasPreview"></canvas>
 
@@ -99,7 +96,6 @@
     var recordedChunks = [];
     var isRecording = false;
 
-    // Geolocation capture
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(function(pos) {
         currentLat = pos.coords.latitude;
@@ -112,7 +108,6 @@
       history.back();
     }
 
-    // Configure MediaPipe Face Detection
     var faceDetection = new FaceDetection({
       locateFile: function(file) {
         return "https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/" + file;
@@ -124,7 +119,6 @@
       minDetectionConfidence: 0.5
     });
 
-    // Real-time frame processing and blurring
     faceDetection.onResults(function(results) {
       if (!canvasElement.width && videoElement.videoWidth) {
         canvasElement.width = videoElement.videoWidth;
@@ -143,7 +137,6 @@
           var x = (box.xCenter * canvasElement.width) - (w / 2);
           var y = (box.yCenter * canvasElement.height) - (h / 2);
 
-          // Add padding around detected face area
           var padX = w * 0.15;
           var padY = h * 0.20;
 
@@ -159,46 +152,51 @@
       canvasCtx.restore();
     });
 
-    // Start camera, face detector, and video recording
+    async function frameProcessingLoop() {
+      if (!isRecording) return;
+      if (videoElement.readyState >= 2) {
+        await faceDetection.send({ image: videoElement });
+      }
+      if ('requestVideoFrameCallback' in videoElement) {
+        videoElement.requestVideoFrameCallback(frameProcessingLoop);
+      } else {
+        requestAnimationFrame(frameProcessingLoop);
+      }
+    }
+
     async function startCapture() {
       try {
         statusText.innerText = "Initialising privacy camera...";
         actionBtn.disabled = true;
 
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: true
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          },
+          audio: false
         });
 
         videoElement.srcObject = mediaStream;
         await videoElement.play();
 
+        canvasElement.width = videoElement.videoWidth || 640;
+        canvasElement.height = videoElement.videoHeight || 480;
         canvasElement.style.display = 'block';
 
-        // Initialise camera loop with MediaPipe
-        var camera = new Camera(videoElement, {
-          onFrame: async function() {
-            if (isRecording) {
-              await faceDetection.send({ image: videoElement });
-            }
-          },
-          width: 640,
-          height: 480
-        });
-        camera.start();
+        isRecording = true;
+        frameProcessingLoop();
 
-        // Capture stream directly from the canvas
         var canvasStream = canvasElement.captureStream(25);
+        var mimeType = '';
 
-        // Include audio track if available
-        var audioTracks = mediaStream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          canvasStream.addTrack(audioTracks[0]);
-        }
-
-        var mimeType = 'video/webm';
-        if (!MediaRecorder.isTypeSupported('video/webm')) {
-          mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : '';
+        if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+          mimeType = 'video/webm;codecs=vp8';
+        } else if (MediaRecorder.isTypeSupported('video/webm')) {
+          mimeType = 'video/webm';
+        } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+          mimeType = 'video/mp4';
         }
 
         recordedChunks = [];
@@ -211,9 +209,7 @@
         };
 
         mediaRecorder.onstop = uploadRecordedVideo;
-
         mediaRecorder.start();
-        isRecording = true;
 
         actionBtn.innerText = "Stop & Submit Video";
         actionBtn.className = "btn btn-stop";
@@ -222,8 +218,11 @@
         statusText.innerText = "Recording... Faces are automatically blurred.";
 
       } catch (err) {
-        statusText.innerText = "Camera access denied or unsupported.";
+        statusText.innerText = "Error accessing camera: " + err.message;
         actionBtn.disabled = false;
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(function(t) { t.stop(); });
+        }
       }
     }
 
@@ -241,7 +240,6 @@
       }
     }
 
-    // Retains your exact Base64 conversion and Google Apps Script fetch logic
     function uploadRecordedVideo() {
       var blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
       var reader = new FileReader();
